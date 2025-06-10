@@ -1,16 +1,14 @@
 #!/bin/bash
 set -e
 
-sudo apt update && sudo apt install zsh -y 
+sudo apt update && sudo apt install git zsh tmux vim -y 
 
 if [ ! -d "$HOME/.oh-my-zsh" ]; then
     echo "installing Oh My Zsh..."
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-    echo "Oh My Zsh installed successfully."
-
-    echo "setting up Oh My Zsh mirror..."
-    git -C $ZSH remote set-url origin https://mirrors.tuna.tsinghua.edu.cn/git/ohmyzsh.git
-    git -C $ZSH pull
+    git clone https://mirrors.tuna.tsinghua.edu.cn/git/ohmyzsh.git
+    cd ohmyzsh/tools
+    REMOTE=https://mirrors.tuna.tsinghua.edu.cn/git/ohmyzsh.git sh install.sh
+    rm -rf "./ohmyzsh"
 else
     echo "Oh my zsh already installed"
 fi
@@ -25,6 +23,5 @@ fi
 
 # Change theme to powerlevel10k
 echo "Setting powerlevel10k theme..."
-sed -i'.bak' 's/^ZSH_THEME=.*$/ZSH_THEME="powerlevel10k\/powerlevel10k"/' ~/.zshrc
+sed -i'.bak' 's/^ZSH_THEME=.*$/ZSH_THEME="powerlevel10k\/powerlevel10k"/' $HOME/.zshrc
 echo "Theme set to powerlevel10k, reloading zsh configuration..."
-source ~/.zshrc
