@@ -6,6 +6,7 @@ OS_RELEASE_FILE=${OS_RELEASE_FILE:-/etc/os-release}
 SUDO=""
 OS_ID=""
 VERSION_CODENAME=""
+TARGET_USER=""
 
 usage() {
   cat <<'EOF'
@@ -62,11 +63,13 @@ parse_args() {
 require_root_or_sudo() {
   if [ "$(id -u)" -eq 0 ]; then
     SUDO=""
+    TARGET_USER=${SUDO_USER:-${USER:-}}
     return 0
   fi
 
   if command -v sudo >/dev/null 2>&1; then
     SUDO="sudo"
+    TARGET_USER=${USER:-}
     return 0
   fi
 
@@ -145,8 +148,37 @@ install_docker_packages_debian() {
   run_cmd ${SUDO:+$SUDO} apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }
 
+user_in_group() {
+  user_name=$1
+
+  if command -v id >/dev/null 2>&1 && id -nG "$user_name" 2>/dev/null | grep -Eq '(^|[[:space:]])docker($|[[:space:]])'; then
+    return 0
+  fi
+
+  return 1
+}
+
+init_docker_group() {
+  if [ -z "$TARGET_USER" ]; then
+    log "Skipping docker group initialization because the target user could not be determined."
+    return 0
+  fi
+
+  if ! getent group docker >/dev/null 2>&1; then
+    run_cmd ${SUDO:+$SUDO} groupadd docker
+  fi
+
+  if ! user_in_group "$TARGET_USER"; then
+    run_cmd ${SUDO:+$SUDO} usermod -aG docker "$TARGET_USER"
+  fi
+}
+
 print_next_steps() {
   log "Docker installation complete."
+  if [ -n "$TARGET_USER" ]; then
+    log "Docker group access configured for user: $TARGET_USER"
+    log "Run 'newgrp docker' or log out and back in to apply the new group in your current session."
+  fi
   log "Verify with: docker --version"
   log "Verify with: docker compose version"
 }
@@ -160,6 +192,7 @@ main() {
   install_prerequisites
   setup_docker_repo_debian
   install_docker_packages_debian
+  init_docker_group
   print_next_steps
 }
 

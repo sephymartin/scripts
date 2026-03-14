@@ -1,8 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # BBR 拥塞控制算法安装/启用脚本
 # 支持 BBR/BBRv2/BBRv3 检测和启用
 #
+if [ -z "${BASH_VERSION:-}" ]; then
+    printf '%s\n' "请使用 bash 运行此脚本。" >&2
+    printf '%s\n' "示例：" >&2
+    printf '%s\n' "  curl -fsSL https://raw.githubusercontent.com/sephymartin/scripts/main/enable_bbr.sh | bash -s -- -a" >&2
+    printf '%s\n' "  bash enable_bbr.sh -a" >&2
+    exit 1
+fi
+
 set -e
 
 # 颜色定义

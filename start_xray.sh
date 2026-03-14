@@ -14,6 +14,8 @@ REALITY_SHORT_ID=""
 CRON_SCHEDULE="0 3 * * *"
 DRY_RUN=0
 SKIP_DOCKER="${XRAY_SKIP_DOCKER:-0}"
+VERIFY_MAX_ATTEMPTS="${XRAY_VERIFY_MAX_ATTEMPTS:-10}"
+VERIFY_RETRY_INTERVAL="${XRAY_VERIFY_RETRY_INTERVAL:-3}"
 
 INSTALL_DIR="${HOME}/docker-compose"
 DATA_DIR="${HOME}/data"
@@ -132,7 +134,26 @@ command -v sed >/dev/null 2>&1 || die "sed is required"
 if [ "$DRY_RUN" -ne 1 ]; then
   command -v docker >/dev/null 2>&1 || die "docker is required"
   command -v crontab >/dev/null 2>&1 || die "crontab is required"
+  command -v curl >/dev/null 2>&1 || die "curl is required"
 fi
+
+require_docker_access() {
+  [ "$DRY_RUN" -eq 1 ] && return
+
+  set +e
+  docker_info_output=$(docker info 2>&1)
+  docker_info_status=$?
+  set -e
+
+  if [ "$docker_info_status" -ne 0 ]; then
+    warn "docker info exited with status $docker_info_status"
+    if [ -n "$docker_info_output" ]; then
+      warn "docker info output:"
+      printf '%s\n' "$docker_info_output" >&2
+    fi
+    die "docker daemon is not accessible; check docker service status and current user permissions for /var/run/docker.sock"
+  fi
+}
 
 generate_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
@@ -373,7 +394,7 @@ write_xray_config() {
                 "decryption": "none",
                 "fallbacks": [
                     {
-                        "dest": "__FALLBACK_DOMAIN__:443",
+                        "dest": "nginx:9443",
                         "xver": 0
                     }
                 ]
@@ -602,8 +623,8 @@ server {
 
 server {
     resolver 127.0.0.11 valid=30s ipv6=off;
-    listen 9443 ssl;
-    server_name __DOMAIN__ proxy_protocol ssl http2;
+    listen 9443 ssl http2;
+    server_name __DOMAIN__;
 
     ssl_certificate /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
@@ -717,7 +738,7 @@ upstream nginx_https {
 }
 
 map $ssl_preread_server_name $backend_name {
-    __DOMAIN__      xray_backend;
+    __REALITY_SERVER_NAME__      xray_backend;
     default         nginx_https;
 }
 
@@ -860,6 +881,9 @@ issue_certificate_if_needed() {
 
   info "Requesting initial certificate for ${DOMAIN}"
   docker compose -f "$COMPOSE_FILE" --profile manual run --rm certbot certonly \
+    --non-interactive \
+    --agree-tos \
+    --register-unsafely-without-email \
     --dns-cloudflare \
     --dns-cloudflare-credentials /etc/cloudflare.ini \
     --dns-cloudflare-propagation-seconds 60 \
@@ -867,12 +891,55 @@ issue_certificate_if_needed() {
 }
 
 start_services() {
-  info "Starting Docker Compose stack"
-  docker compose -f "$COMPOSE_FILE" up -d
+  info "Starting Docker Compose stack and recreating nginx/xray"
+  docker compose -f "$COMPOSE_FILE" up -d --force-recreate nginx xray
+}
+
+verify_https_status() {
+  [ "$DRY_RUN" -eq 1 ] && return
+
+  attempt=1
+  while [ "$attempt" -le "$VERIFY_MAX_ATTEMPTS" ]; do
+    info "Validating HTTPS endpoint with curl -i (attempt ${attempt}/${VERIFY_MAX_ATTEMPTS})"
+    set +e
+    curl_output=$(curl -i -sS --max-time 30 "https://${DOMAIN}/" 2>&1)
+    curl_status=$?
+    set -e
+
+    if [ "$curl_status" -eq 0 ]; then
+      http_status=$(printf '%s\n' "$curl_output" | awk '/^HTTP\// { code=$2 } END { print code }')
+      if [ "${http_status:-}" = "200" ]; then
+        info "HTTP validation succeeded with status 200"
+        return
+      fi
+      warn "received HTTP status ${http_status:-unknown} from https://${DOMAIN}/"
+    else
+      warn "curl exited with status $curl_status while validating https://${DOMAIN}/"
+    fi
+
+    if [ "$attempt" -lt "$VERIFY_MAX_ATTEMPTS" ]; then
+      warn "waiting ${VERIFY_RETRY_INTERVAL}s for nginx to become ready"
+      sleep "$VERIFY_RETRY_INTERVAL"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  if [ "${curl_status:-1}" -ne 0 ]; then
+    if [ -n "${curl_output:-}" ]; then
+      warn "curl output:"
+      printf '%s\n' "$curl_output" >&2
+    fi
+    die "HTTPS validation failed for https://${DOMAIN}/"
+  fi
+
+  warn "curl response for https://${DOMAIN}/:"
+  printf '%s\n' "$curl_output" >&2
+  die "unexpected HTTP status from https://${DOMAIN}/: ${http_status:-unknown}"
 }
 
 [ -n "$XRAY_UUID" ] || XRAY_UUID=$(generate_uuid)
 [ -n "$REALITY_SHORT_ID" ] || REALITY_SHORT_ID=$(generate_short_id)
+require_docker_access
 if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
   generate_reality_keys
 fi
@@ -896,6 +963,7 @@ fi
 
 issue_certificate_if_needed
 start_services
+verify_https_status
 
 cat <<EOF
 
