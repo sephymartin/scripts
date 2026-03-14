@@ -182,8 +182,12 @@ generate_reality_keys() {
 
   info "Generating Reality x25519 keypair via Docker"
   key_output=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || true)
-  REALITY_PRIVATE_KEY=$(printf '%s\n' "$key_output" | awk '/Private key:/ { print $3 }')
-  REALITY_PUBLIC_KEY=$(printf '%s\n' "$key_output" | awk '/Public key:/ { print $3 }')
+  REALITY_PRIVATE_KEY=$(printf '%s\n' "$key_output" | awk -F': ' '
+    $1 == "Private key" || $1 == "PrivateKey" { print $2; exit }
+  ')
+  REALITY_PUBLIC_KEY=$(printf '%s\n' "$key_output" | awk -F': ' '
+    $1 == "Public key" || $1 == "PublicKey" || $1 == "Password" { print $2; exit }
+  ')
 
   [ -n "$REALITY_PRIVATE_KEY" ] || die "failed to generate Reality private key"
   [ -n "$REALITY_PUBLIC_KEY" ] || die "failed to generate Reality public key"
