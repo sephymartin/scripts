@@ -181,7 +181,19 @@ generate_reality_keys() {
   fi
 
   info "Generating Reality x25519 keypair via Docker"
-  key_output=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || true)
+  set +e
+  key_output=$(docker run --rm teddysun/xray xray x25519 2>&1)
+  key_status=$?
+  set -e
+
+  if [ "$key_status" -ne 0 ]; then
+    warn "xray x25519 exited with status $key_status"
+    if [ -n "$key_output" ]; then
+      warn "xray x25519 output:"
+      printf '%s\n' "$key_output" >&2
+    fi
+  fi
+
   REALITY_PRIVATE_KEY=$(printf '%s\n' "$key_output" | awk -F': ' '
     $1 == "Private key" || $1 == "PrivateKey" { print $2; exit }
   ')
@@ -189,8 +201,23 @@ generate_reality_keys() {
     $1 == "Public key" || $1 == "PublicKey" || $1 == "Password" { print $2; exit }
   ')
 
-  [ -n "$REALITY_PRIVATE_KEY" ] || die "failed to generate Reality private key"
-  [ -n "$REALITY_PUBLIC_KEY" ] || die "failed to generate Reality public key"
+  if [ -z "$REALITY_PRIVATE_KEY" ]; then
+    warn "unable to parse Reality private key from xray x25519 output"
+    if [ -n "$key_output" ]; then
+      warn "xray x25519 raw output for debugging:"
+      printf '%s\n' "$key_output" >&2
+    fi
+    die "failed to generate Reality private key"
+  fi
+
+  if [ -z "$REALITY_PUBLIC_KEY" ]; then
+    warn "unable to parse Reality public key from xray x25519 output"
+    if [ -n "$key_output" ]; then
+      warn "xray x25519 raw output for debugging:"
+      printf '%s\n' "$key_output" >&2
+    fi
+    die "failed to generate Reality public key"
+  fi
 }
 
 escape_replacement() {
